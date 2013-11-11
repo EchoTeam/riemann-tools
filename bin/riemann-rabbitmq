@@ -10,13 +10,13 @@ class Riemann::Tools::Rabbitmq
   require 'uri'
 
 
-  opt :read_timeout, 'Faraday read timeout', type: :int, default: 5
-  opt :open_timeout, 'Faraday open timeout', type: :int, default: 5
+  opt :read_timeout, 'Faraday read timeout', :type => :int, :default => 5
+  opt :open_timeout, 'Faraday open timeout', :type => :int, :default => 5
 
-  opt :monitor_user, 'RabbitMQ monitoring user', type: :string
-  opt :monitor_pass, 'RabbitMQ monitoring user password', type: :string
-  opt :monitor_port, 'RabbitMQ monitoring port', default: 15672
-  opt :monitor_host, 'RabbitMQ monitoring host', default: "localhost"
+  opt :monitor_user, 'RabbitMQ monitoring user', :type => :string
+  opt :monitor_pass, 'RabbitMQ monitoring user password', :type => :string
+  opt :monitor_port, 'RabbitMQ monitoring port', :default => 15672
+  opt :monitor_host, 'RabbitMQ monitoring host', :default => "localhost"
 
   def endpoint(path)
     "http://#{options[:monitor_user]}:#{options[:monitor_pass]}@#{options[:monitor_host]}:#{options[:monitor_port]}#{path}"
