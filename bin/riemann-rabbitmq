@@ -44,7 +44,7 @@ class Riemann::Tools::Rabbitmq
 
   def report_event(service, value, state = "ok", description = "")
     report(:host => event_host, :service => "rabbitmq #{service}", :metric => value,
-           :stats => state, :description => description, :tags => ["rabbitmq"])
+           :stats => state, :description => description)
   end
 
   def get_in(record, path)
