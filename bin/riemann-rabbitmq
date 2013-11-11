@@ -1,5 +1,4 @@
 #!/usr/bin/env ruby
-#
 
 require File.expand_path('../../lib/riemann/tools', __FILE__)
 
@@ -11,89 +10,77 @@ class Riemann::Tools::Rabbitmq
   require 'uri'
 
 
-  opt :read_timeout, 'Faraday read timeout', type: :int, default: 2
-  opt :open_timeout, 'Faraday open timeout', type: :int, default: 1
+  opt :read_timeout, 'Faraday read timeout', type: :int, default: 5
+  opt :open_timeout, 'Faraday open timeout', type: :int, default: 5
 
   opt :monitor_user, 'RabbitMQ monitoring user', type: :string
   opt :monitor_pass, 'RabbitMQ monitoring user password', type: :string
   opt :monitor_port, 'RabbitMQ monitoring port', default: 15672
   opt :monitor_host, 'RabbitMQ monitoring host', default: "localhost"
 
-  def monitor_url
-    "http://#{options[:monitor_user]}:#{options[:monitor_pass]}@#{options[:monitor_host]}:#{options[:monitor_port]}/api/overview"
+  def endpoint(path)
+    "http://#{options[:monitor_user]}:#{options[:monitor_pass]}@#{options[:monitor_host]}:#{options[:monitor_port]}#{path}"
   end
 
   def event_host
-    if options[:event_host]
-      return options[:event_host]
-    else
-      return options[:monitor_host]
-    end
+    options[:event_host] || options[:monitor_host]
   end
 
-  def safe_get(uri, event_host)
-      # Handle connection timeouts
-      response = nil
-      begin
-        connection = Faraday.new(uri)
-        response = connection.get do |req|
-          req.options[:timeout] = options[:read_timeout]
-          req.options[:open_timeout] = options[:open_timeout]
-        end
-      rescue => e
-        report(:host => event_host,
-          :service => "rabbitmq monitoring",
-          :state => "critical",
-          :description => "HTTP connection error: #{e.class} - #{e.message}"
-        )
-      end
-      response
+  def get(uri)
+    connection = Faraday.new(uri) do |c|
+      c.use Faraday::Response::RaiseError
+      c.adapter  :net_http
+    end
+    response = connection.get do |req|
+      req.options[:timeout] = options[:read_timeout]
+      req.options[:open_timeout] = options[:open_timeout]
+    end
+    JSON.parse(response.body)
+  end
+
+  def short_host(hostname)
+    (hostname =~ /^(\w+)(\.|$)/ ? $1 : hostname)
+  end
+
+  def report_event(service, value, state = "ok", description = "")
+    report(:host => event_host, :service => "rabbitmq #{service}", :metric => value,
+           :stats => state, :description => description, :tags => ["rabbitmq"])
+  end
+
+  def get_in(record, path)
+    path.inject(record) {|obj, field| (obj || {})[field]}
   end
 
   def tick
-    uri = URI(monitor_url)
-    response = safe_get(uri, event_host)
+    host = short_host(event_host)
+    begin
+      overview = get(endpoint("/api/overview"))
 
-    return if response.nil?
+      rates = { "publish_rate" => %w{message_stats publish_details rate},
+                "ack_rate"     => %w{message_stats ack_details rate} }
 
-    json = JSON.parse(response.body)
+      rates.each do |metric, path|
+        report_event("#{host} overview #{metric}", get_in(overview, path))
+      end
 
-    if response.status != 200
-        report(:host => event_host,
-          :service => "rabbitmq",
-          :state => "critical",
-          :description => "HTTP connection error: #{response.status} - #{response.body}"
-        )
-    else
-      report(:host => event_host,
-        :service => "rabbitmq monitoring",
-        :state => "ok",
-        :description => "HTTP connection ok"
-      )
+      queues = get(endpoint("/api/queues"))
 
-      %w( message_stats queue_totals object_totals ).each do |stat|
-        # NOTE / BUG ?
-        # Brand new servers can have blank message stats. Is this ok?
-        # I can't decide.
-        next if json[stat].empty?
-        json[stat].each_pair do |k,v|
-          service = "rabbitmq.#{stat}.#{k}"
-          if k =~ /details$/
-            metric = v['rate']
-          else
-            metric = v
-          end
-
-          # TODO: Set state via thresholds which can be configured
-
-          report(:host => event_host,
-                 :service => service,
-                 :metric => metric,
-                 :description => "RabbitMQ monitor"
-                )
+      queues.each do |q|
+        queue_name = q["name"].gsub(/\W+/, '_')
+        metrics = rates.merge({ "messages"  => %w{messages},
+                                "consumers" => %w{consumers} })
+        metrics.each do |metric, path|
+          report_event("#{host} #{queue_name} #{metric}", get_in(q, path))
         end
       end
+
+      report_event("#{host} monitoring", 0, "ok")
+    rescue => e
+      puts e.message
+      puts e.backtrace
+      report_event("#{host} monitoring", 1, "critical", "Error:  #{e.class} - #{e.message}")
     end
   end
 end
+
 Riemann::Tools::Rabbitmq.run
