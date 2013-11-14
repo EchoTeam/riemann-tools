@@ -10,7 +10,7 @@ ENV['COPYFILE_DISABLE'] = 'true'
 # Gemspec
 gemspec = Gem::Specification.new do |s|
   s.name = 'echo-riemann-tools'
-  s.version = '0.1.6'
+  s.version = '0.1.7'
   s.author = 'Kyle Kingsbury'
   s.email = 'aphyr@aphyr.com'
   s.homepage = 'https://github.com/EchoTeam/riemann-tools'
@@ -28,6 +28,7 @@ gemspec = Gem::Specification.new do |s|
   s.add_dependency 'nokogiri', '~>1.5.0'
   s.add_dependency 'mime-types', '~>1.16'
   s.add_dependency 'fog', '>= 1.18.0'
+  s.add_dependency 'pg', '>= 0.17.0'
 
 
   s.files = FileList['lib/**/*', 'bin/*', 'LICENSE', 'README.markdown'].to_a

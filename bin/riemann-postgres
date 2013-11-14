@@ -1,0 +1,179 @@
+#!/usr/bin/env ruby
+
+
+require File.expand_path('../../lib/riemann/tools', __FILE__)
+
+class Riemann::Tools::Postgres
+  include Riemann::Tools
+
+  require "pg"
+
+  opt :monitor_databases, 'Databases to monitor', :type => String, :multi => true
+  opt :monitor_host, 'Database host', :type => String
+  opt :monitor_user, 'Database user', :type => String
+  opt :monitor_pass, 'Database passoword', :type => String
+
+  def db_list(connection, possible_dbs)
+    results = connection.exec("SELECT datname FROM pg_database WHERE datistemplate = false;")
+    server_dbs = results.field_values('datname')
+    server_dbs.find_all {|db| (possible_dbs || []).include?(db)}
+  end
+
+  def event_host
+    options[:event_host]
+  end
+
+  def connection_params(db)
+    config = {:dbname => db, :user => options[:monitor_user], :password => options[:monitor_pass], :host => options[:monitor_host]}
+    config.reject{|k,v| v.nil?}
+  end
+
+  def connect_to(db)
+    connection = PG::Connection.new(connection_params(db))
+    if block_given?
+      yield(connection).tap {connection.finish}
+    else
+      connection
+    end
+  end
+
+
+  def replication_stats(prefix, connection)
+    sql = <<SQL
+SELECT '' as empty_category,
+CASE WHEN pg_is_in_recovery() THEN '0' ELSE translate(pg_current_xlog_location(), '/', '0') END AS write_location,
+translate(pg_last_xlog_receive_location(), '/', '0') AS receive_location,
+translate(pg_last_xlog_replay_location(), '/', '0') AS replay_location
+SQL
+    run_query(prefix, connection, sql) do |event|
+        event[:metric] = event[:metric].to_i(16)
+        report(event)
+      end
+  end
+
+  def general_stats(prefix, connection)
+    run_query(prefix, connection, "SELECT datname, xact_commit, xact_rollback FROM pg_stat_database WHERE datname = current_database()", &method(:report))
+  end
+
+  def table_stats(prefix, connection)
+    run_query(prefix, connection, "SELECT relname, n_tup_ins as tuples_inserted, n_tup_upd AS tuples_updated, n_tup_del AS tuples_deleted
+                                                   FROM pg_stat_user_tables ORDER BY relname", &method(:report))
+  end
+
+  def func_stats(prefix, connection)
+    run_query(prefix, connection, "SELECT funcname, calls, total_time, self_time FROM pg_stat_user_functions ORDER BY funcname", &method(:report))
+  end
+
+  def index_stats(prefix, connection)
+    sql = <<SQL
+SELECT
+sui.indexrelname,
+pg_relation_size(i.indexrelid) AS real_size,
+
+((ceil(idx.reltuples
+  * ((constants.index_tuple_header_size
+    + constants.item_id_data_size
+    + CASE WHEN (COALESCE(SUM(CASE WHEN statts.staattnotnull THEN 0 ELSE 1 END), 0::BIGINT)
+        + ((SELECT COALESCE(SUM(CASE WHEN atts.attnotnull THEN 0 ELSE 1 END), 0::BIGINT)
+            FROM pg_attribute atts
+            JOIN (SELECT i.indkey[the.i] AS attnum
+                  FROM generate_series(0, i.indnatts - 1) the(i)) cols
+              ON atts.attnum = cols.attnum
+            WHERE atts.attrelid = i.indrelid))) > 0
+      THEN (SELECT the.null_bitmap_size + constants.max_align
+            - CASE WHEN (the.null_bitmap_size % constants.max_align) = 0 THEN constants.max_align
+              ELSE the.null_bitmap_size % constants.max_align END
+            FROM (VALUES (i.indnatts / 8
+                  + CASE WHEN (i.indnatts % 8) = 0 THEN 0 ELSE 1 END)) the(null_bitmap_size))
+      ELSE 0 END)::DOUBLE PRECISION
+      + COALESCE(SUM(statts.stawidth::DOUBLE PRECISION * (1::DOUBLE PRECISION - statts.stanullfrac)
+), 0::DOUBLE PRECISION)
+      + COALESCE((SELECT SUM(atts.stawidth::DOUBLE PRECISION * (1::DOUBLE PRECISION - atts.stanullfrac))
+                  FROM pg_statistic atts
+                  JOIN (SELECT i.indkey[the.i] AS attnum
+                        FROM generate_series(0, i.indnatts - 1) the(i)) cols
+                    ON atts.staattnum = cols.attnum
+                  WHERE atts.starelid = i.indrelid), 0::DOUBLE PRECISION))
+    / (constants.block_size - constants.page_header_data_size::NUMERIC - constants.special_space::NUMERIC)::DOUBLE PRECISION)
+  + constants.index_metadata_pages::DOUBLE PRECISION)
+* constants.block_size::DOUBLE PRECISION)::BIGINT AS estimated_size,
+
+sui.idx_scan,
+sui.idx_tup_read,
+sui.idx_tup_fetch,
+pg_stat_get_blocks_fetched(i.indexrelid) AS blk_fetch,
+pg_stat_get_blocks_hit(i.indexrelid) AS blk_hit
+
+FROM pg_index AS i
+JOIN pg_class idx ON i.indexrelid = idx.oid
+JOIN pg_stat_user_indexes AS sui ON (i.indexrelid = sui.indexrelid)
+LEFT JOIN (
+  SELECT pg_statistic.starelid, pg_statistic.staattnum,
+    pg_statistic.stanullfrac, pg_statistic.stawidth,
+    pg_attribute.attnotnull AS staattnotnull
+  FROM pg_statistic
+  JOIN pg_attribute ON pg_statistic.starelid = pg_attribute.attrelid
+    AND pg_statistic.staattnum = pg_attribute.attnum
+) AS statts ON statts.starelid = idx.oid
+CROSS JOIN (
+  SELECT current_setting('block_size'::TEXT)::NUMERIC AS block_size,
+    CASE WHEN substring(version(), 12, 3) = ANY (ARRAY['8.0'::TEXT, '8.1'::TEXT, '8.2'::TEXT])
+      THEN 27 ELSE 23 END AS tuple_header_size,
+    CASE WHEN version() ~ 'mingw32'::TEXT THEN 8 ELSE 4 END AS max_align,
+    8 AS index_tuple_header_size,
+    4 AS item_id_data_size,
+    24 AS page_header_data_size,
+    0 AS special_space,
+    1 AS index_metadata_pages
+) AS constants
+GROUP BY
+sui.indexrelname, sui.idx_scan, sui.idx_tup_read, sui.idx_tup_fetch,
+idx.reltuples, i.indexrelid, i.indrelid, i.indkey, i.indnatts,
+constants.block_size, constants.tuple_header_size,
+constants.max_align, constants.index_tuple_header_size,
+constants.item_id_data_size, constants.page_header_data_size,
+constants.index_metadata_pages, constants.special_space
+ORDER BY
+sui.indexrelname
+SQL
+    run_query(prefix, connection, sql, &method(:report))
+  end
+
+  def run_query(prefix, connection, query)
+    result = connection.exec(query)
+    result.each do |row|
+      category, *fields = result.fields
+      fields.each do |metric|
+        parts = [prefix, row[category], metric]
+        service = parts.reject{|s| (s || "").empty? }.join(" ")
+        if block_given? && row[metric]
+          yield :service => service, :metric => row[metric]
+        end
+      end
+    end
+  end
+
+  def tick
+    prefix = "psql #{event_host}"
+    dbs = connect_to("postgres") do |connection|
+      replication_stats(prefix, connection)
+      db_list(connection, options[:monitor_databases])
+    end
+    dbs.each do |db|
+      connect_to(db) do |connection|
+        general_stats("#{prefix} database", connection)
+        table_stats("#{prefix} database #{db} table", connection)
+        func_stats("#{prefix} database #{db} func", connection)
+        index_stats("#{prefix} database #{db} index", connection)
+      end
+    end
+    report(:service => "#{prefix} monitoring", :metric => 0)
+  rescue => e
+    puts e.message
+    puts e.backtrace
+    report(:service => "#{prefix} monitoring", :metric => 1)
+  end
+end
+
+Riemann::Tools::Postgres.run
+
