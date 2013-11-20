@@ -29,7 +29,7 @@ class Riemann::Tools::Rabbitmq
   def get(uri)
     connection = Faraday.new(uri) do |c|
       c.use Faraday::Response::RaiseError
-      c.adapter  :net_http
+      c.use Faraday::Adapter::NetHttp
     end
     response = connection.get do |req|
       req.options[:timeout] = options[:read_timeout]
@@ -40,11 +40,6 @@ class Riemann::Tools::Rabbitmq
 
   def short_host(hostname)
     (hostname =~ /^(\w+)(\.|$)/ ? $1 : hostname)
-  end
-
-  def report_event(service, value, state = "ok", description = "")
-    report(:host => event_host, :service => "rabbitmq #{service}", :metric => value,
-           :stats => state, :description => description)
   end
 
   def get_in(record, path)
@@ -60,25 +55,26 @@ class Riemann::Tools::Rabbitmq
                 "ack_rate"     => %w{message_stats ack_details rate} }
 
       rates.each do |metric, path|
-        report_event("#{host} overview #{metric}", get_in(overview, path))
+        value = get_in(overview, path)
+        report(:service => "rabbitmq #{host} overview #{metric}", :metric => value) unless value.nil?
       end
 
       queues = get(endpoint("/api/queues"))
 
+      queue_metrics = rates.merge({ "messages"  => %w{messages},
+                                    "consumers" => %w{consumers} })
       queues.each do |q|
         queue_name = q["name"].gsub(/\W+/, '_')
-        metrics = rates.merge({ "messages"  => %w{messages},
-                                "consumers" => %w{consumers} })
-        metrics.each do |metric, path|
-          report_event("#{host} #{queue_name} #{metric}", get_in(q, path))
+        queue_metrics.each do |metric, path|
+          value = get_in(q, path)
+          report(:service => "rabbitmq #{host} #{queue_name} #{metric}", :metric => value) unless value.nil?
         end
       end
-
-      report_event("#{host} monitoring", 0, "ok")
+      report(:service => "rabbitmq #{host} monitoring", :metric => 0)
     rescue => e
       puts e.message
       puts e.backtrace
-      report_event("#{host} monitoring", 1, "critical", "Error:  #{e.class} - #{e.message}")
+      report(:service => "rabbitmq #{host} monitoring", :metric => 1)
     end
   end
 end
