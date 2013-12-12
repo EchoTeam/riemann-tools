@@ -23,9 +23,9 @@ class Riemann::Tools::Postgres
 
   def connection_params(db)
     connections = options[:monitor_databases].inject({}) do |params, conf|
-        db, user, password = conf.scan(/\w+/)
-        pg_params = {:dbname => db, :user => user, :password => password, :host => options[:monitor_host]} 
-        params[db] = pg_params.reject{|k,v| v.nil?}
+        dbname, user, password = conf.scan(/\w+/)
+        pg_params = {:dbname => dbname, :user => user, :password => password, :host => options[:monitor_host]} 
+        params[dbname] = pg_params.reject{|k,v| v.nil?}
         params
     end
     connections[db]
