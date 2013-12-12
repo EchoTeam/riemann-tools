@@ -10,8 +10,6 @@ class Riemann::Tools::Postgres
 
   opt :monitor_databases, 'Databases to monitor', :type => String, :multi => true
   opt :monitor_host, 'Database host', :type => String
-  opt :monitor_user, 'Database user', :type => String
-  opt :monitor_pass, 'Database passoword', :type => String
 
   def db_list(connection, possible_dbs)
     results = connection.exec("SELECT datname FROM pg_database WHERE datistemplate = false;")
@@ -24,8 +22,13 @@ class Riemann::Tools::Postgres
   end
 
   def connection_params(db)
-    config = {:dbname => db, :user => options[:monitor_user], :password => options[:monitor_pass], :host => options[:monitor_host]}
-    config.reject{|k,v| v.nil?}
+    connections = options[:monitor_databases].inject({}) do |params, conf|
+        db, user, password = conf.scan(/\w+/)
+        pg_params = {:dbname => db, :user => user, :password => password, :host => options[:monitor_host]} 
+        params[db] = pg_params.reject{|k,v| v.nil?}
+        params
+    end
+    connections[db]
   end
 
   def connect_to(db)
