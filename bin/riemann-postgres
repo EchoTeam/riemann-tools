@@ -21,18 +21,17 @@ class Riemann::Tools::Postgres
     options[:event_host]
   end
 
-  def connection_params(db)
-    connections = options[:monitor_databases].inject({}) do |params, conf|
+  def connection_params
+    options[:monitor_databases].inject({}) do |params, conf|
         dbname, user, password = conf.scan(/\w+/)
         pg_params = {:dbname => dbname, :user => user, :password => password, :host => options[:monitor_host]} 
         params[dbname] = pg_params.reject{|k,v| v.nil?}
         params
     end
-    connections[db]
   end
 
   def connect_to(db)
-    connection = PG::Connection.new(connection_params(db))
+    connection = PG::Connection.new(connection_params[db])
     if block_given?
       yield(connection).tap {connection.finish}
     else
@@ -158,10 +157,12 @@ SQL
 
   def tick
     prefix = "psql #{event_host}"
+
     dbs = connect_to("postgres") do |connection|
       replication_stats(prefix, connection)
-      db_list(connection, options[:monitor_databases])
+      db_list(connection, connection_params.keys)
     end
+
     dbs.each do |db|
       connect_to(db) do |connection|
         general_stats("#{prefix} database", connection)
