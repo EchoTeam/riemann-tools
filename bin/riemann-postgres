@@ -160,7 +160,7 @@ SQL
 
     dbs = connect_to("postgres") do |connection|
       replication_stats(prefix, connection)
-      db_list(connection, connection_params.keys {|c| c == "postgres"})
+      db_list(connection, connection_params.keys.reject {|c| c == "postgres"})
     end
 
     dbs.each do |db|
