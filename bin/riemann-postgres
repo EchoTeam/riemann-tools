@@ -8,7 +8,7 @@ class Riemann::Tools::Postgres
 
   require "pg"
 
-  opt :monitor_databases, 'Databases to monitor', :type => String, :multi => true
+  opt :monitor_databases, 'Databases to monitor (DB:User:Passwd)', :type => String, :multi => true
   opt :monitor_host, 'Database host', :type => String
 
   def db_list(connection, possible_dbs)
@@ -18,6 +18,7 @@ class Riemann::Tools::Postgres
   end
 
   def event_host
+    options[:event_host] ||= `hostname`
     options[:event_host] =~ /^(\w+)(\.|$)/ ? $1 : options[:event_host]
   end
 
