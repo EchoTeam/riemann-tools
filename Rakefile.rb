@@ -10,7 +10,7 @@ ENV['COPYFILE_DISABLE'] = 'true'
 # Gemspec
 gemspec = Gem::Specification.new do |s|
   s.name = 'echo-riemann-rabbitmq-tool'
-  s.version = '0.1.7'
+  s.version = '0.1.8'
   s.author = 'Kyle Kingsbury'
   s.email = 'aphyr@aphyr.com'
   s.homepage = 'https://github.com/EchoTeam/riemann-tools'
@@ -18,10 +18,10 @@ gemspec = Gem::Specification.new do |s|
   s.summary = 'Utilities which submit events to Riemann.'
 
   s.add_dependency 'beefcake', '0.5.0'
+  s.add_dependency 'trollop', '2.0'
   s.add_dependency 'riemann-client', '0.2.3'
-  s.add_dependency 'trollop', '>= 1.16.2'
-  s.add_dependency 'json'
-  s.add_dependency 'faraday', '>= 0.8.5'
+  s.add_dependency 'json', '1.5.1'
+  s.add_dependency 'faraday', '0.8.5'
 
   s.files = FileList['lib/**/*', 'bin/*', 'LICENSE', 'README.markdown'].to_a
   s.executables |= Dir.entries('bin/')
